@@ -1,5 +1,7 @@
 # Tele-Antig
 
+> ⚠️ **Unofficial** third-party extension. Not affiliated with Google.
+
 Telegram으로 Google Antigravity의 Agent Manager를 원격 제어하는 VS Code 확장 프로그램.
 
 외출 중에도 Telegram 메시지 하나로 에이전트에게 코딩 작업을 시키고, 파일 변경/터미널 실행/에러 알림을 실시간으로 받을 수 있습니다.
@@ -8,22 +10,21 @@ Telegram으로 Google Antigravity의 Agent Manager를 원격 제어하는 VS Cod
 
 ### 1. VSIX 다운로드
 
-[Releases](https://github.com/your-repo/tele-antig/releases)에서 `.vsix` 파일을 다운로드하거나, 직접 빌드:
+[최신 릴리스](https://github.com/catinvat/tele-antig/releases/latest)에서 `tele-antig-x.x.x.vsix` 다운로드
+
+또는 직접 빌드:
 
 ```bash
-git clone https://github.com/your-repo/tele-antig.git
+git clone https://github.com/catinvat/tele-antig.git
 cd tele-antig
 npm install
 npm run package
-# → tele-antig-0.1.0.vsix 생성
 ```
 
 ### 2. Antigravity에 설치
 
-Antigravity를 열고:
-
 1. `Ctrl+Shift+P` → **Extensions: Install from VSIX...**
-2. 생성된 `tele-antig-0.1.0.vsix` 선택
+2. 다운로드한 `.vsix` 파일 선택
 3. 리로드
 
 ## 초기 설정
@@ -70,12 +71,12 @@ Antigravity에서:
 
 봇이 자동으로 아래 이벤트를 Telegram에 전송합니다:
 
-- 파일 생성/수정/삭제
-- 터미널 명령 실행 및 출력
-- 코드 에러 발생
-- 에이전트 권한 요청 (인라인 버튼으로 수락/거부 가능)
+- 📁 파일 생성/수정/삭제
+- 💻 터미널 명령 실행 및 출력
+- 🔴 코드 에러 발생
+- ⚠️ 에이전트 권한 요청 (인라인 버튼으로 수락/거부 가능)
 
-### Antigravity 명령어
+### Antigravity 명령어 (Ctrl+Shift+P)
 
 | 명령 | 설명 |
 |---|---|
