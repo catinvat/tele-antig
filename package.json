@@ -1,0 +1,90 @@
+{
+  "name": "tele-antig",
+  "displayName": "Tele-Antig: Telegram Bridge for Antigravity",
+  "description": "Control Antigravity Agent Manager via Telegram",
+  "version": "0.1.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "teleAntig.startBot",
+        "title": "Tele-Antig: Start Telegram Bot"
+      },
+      {
+        "command": "teleAntig.stopBot",
+        "title": "Tele-Antig: Stop Telegram Bot"
+      },
+      {
+        "command": "teleAntig.setToken",
+        "title": "Tele-Antig: Set Telegram Bot Token"
+      },
+      {
+        "command": "teleAntig.setChatId",
+        "title": "Tele-Antig: Set Allowed Chat ID"
+      },
+      {
+        "command": "teleAntig.testSend",
+        "title": "Tele-Antig: Test Send to Agent"
+      },
+      {
+        "command": "teleAntig.exploreCommands",
+        "title": "Tele-Antig: Explore All Commands"
+      },
+      {
+        "command": "teleAntig.exploreExtensions",
+        "title": "Tele-Antig: Explore Extensions"
+      },
+      {
+        "command": "teleAntig.exploreLmModels",
+        "title": "Tele-Antig: Explore Language Models"
+      },
+      {
+        "command": "teleAntig.testChatSend",
+        "title": "Tele-Antig: Test Chat Send Command"
+      }
+    ],
+    "configuration": {
+      "title": "Tele-Antig",
+      "properties": {
+        "teleAntig.allowedChatId": {
+          "type": "string",
+          "default": "",
+          "description": "Allowed Telegram Chat ID (only this user can control the agent)"
+        },
+        "teleAntig.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-start Telegram bot when Antigravity launches"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "node esbuild.mjs --production",
+    "build:dev": "node esbuild.mjs",
+    "prepackage": "npm run build",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "dependencies": {
+    "grammy": "^1.35.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "@types/vscode": "^1.93.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.5.0"
+  }
+}
