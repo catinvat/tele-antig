@@ -48,6 +48,7 @@ export class TelegramBot {
   private bot: Bot;
   private bridge: AntigravityBridge;
   private output: vscode.OutputChannel;
+  private token: string;
   private muted = false;
   private eventBuffer: AgentEvent[] = [];
   private flushTimer: ReturnType<typeof setInterval> | undefined;
@@ -55,14 +56,115 @@ export class TelegramBot {
   private bridgeDisposable: vscode.Disposable | undefined;
 
   constructor(token: string, bridge: AntigravityBridge, output: vscode.OutputChannel) {
+    this.token = token;
     this.bot = new Bot(token);
     this.bridge = bridge;
     this.output = output;
+
+    // grammy의 fetch() 대신 Node.js https 모듈 사용
+    // (Antigravity 환경에서 fetch()가 차단되는 문제 해결)
+    this.installHttpsTransport();
 
     this.setupCommands();
     this.setupMessageHandler();
     this.setupCallbackQueries();
     this.setupBridgeListener();
+  }
+
+  /**
+   * grammy의 네트워크 통신을 Node.js https 모듈로 교체
+   *
+   * Antigravity(VS Code fork) 환경에서는 fetch() API가 차단/제한되어
+   * grammy의 기본 HTTP 클라이언트가 동작하지 않음.
+   * Node.js의 https 모듈은 정상 동작하므로 이를 사용하여 Telegram API 호출.
+   */
+  private installHttpsTransport() {
+    const token = this.token;
+    const output = this.output;
+
+    this.bot.api.config.use(async (_prev, method, payload, signal) => {
+      return new Promise((resolve, reject) => {
+        const url = `https://api.telegram.org/bot${token}/${method}`;
+
+        // payload에서 undefined 값 제거 후 JSON 직렬화
+        const cleanPayload: Record<string, unknown> = {};
+        if (payload && typeof payload === 'object') {
+          for (const [k, v] of Object.entries(payload)) {
+            if (v !== undefined) cleanPayload[k] = v;
+          }
+        }
+        const body = JSON.stringify(cleanPayload);
+
+        // getUpdates의 long polling은 timeout이 길어야 함
+        // Telegram의 timeout(초) + 여유 30초
+        const telegramTimeout = (method === 'getUpdates' && typeof cleanPayload.timeout === 'number')
+          ? cleanPayload.timeout as number
+          : 0;
+        const httpTimeout = (telegramTimeout + 30) * 1000;
+
+        const req = https.request(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body).toString(),
+          },
+          timeout: httpTimeout,
+        }, (res) => {
+          let data = '';
+          res.on('data', (chunk: string) => { data += chunk; });
+          res.on('end', () => {
+            try {
+              const parsed = JSON.parse(data);
+              resolve(parsed);
+            } catch {
+              reject(new Error(`[httpsTransport] JSON parse failed for ${method}: ${data.substring(0, 200)}`));
+            }
+          });
+          res.on('error', (err: Error) => {
+            reject(new Error(`[httpsTransport] Response error for ${method}: ${err.message}`));
+          });
+        });
+
+        req.on('error', (err: Error) => {
+          output.appendLine(`[httpsTransport] Request error for ${method}: ${err.message}`);
+          reject(err);
+        });
+
+        req.on('timeout', () => {
+          req.destroy();
+          // getUpdates timeout은 정상적인 polling cycle이므로 빈 결과 반환
+          if (method === 'getUpdates') {
+            resolve({ ok: true, result: [] });
+          } else {
+            reject(new Error(`[httpsTransport] Timeout for ${method}`));
+          }
+        });
+
+        // AbortSignal 처리 (bot.stop() 호출 시 요청 취소)
+        if (signal) {
+          if (signal.aborted) {
+            req.destroy();
+            reject(new Error('Request aborted'));
+            return;
+          }
+          const onAbort = () => {
+            req.destroy();
+            // getUpdates abort은 정상 종료 시나리오
+            if (method === 'getUpdates') {
+              resolve({ ok: true, result: [] });
+            } else {
+              reject(new Error('Request aborted'));
+            }
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+
+        req.write(body);
+        req.end();
+      });
+    });
+
+    output.appendLine('[Bot] HTTPS transport installed (bypassing fetch)');
   }
 
   /**
