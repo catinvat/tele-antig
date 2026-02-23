@@ -69,11 +69,30 @@ Antigravity에서:
 | 일반 메시지 | 에이전트에게 프롬프트 전달 |
 | `/start` | 연결 상태 확인 |
 | `/new` | 새 대화 시작 |
-| `/status` | 워크스페이스, 열린 파일, 터미널 상태 |
+| `/status` | 워크스페이스, 열린 파일, 터미널, 알림 상태 |
 | `/accept` | 에이전트 스텝 수락 |
 | `/reject` | 에이전트 스텝 거부 |
-| `/mute` | 알림 끄기 |
-| `/unmute` | 알림 켜기 |
+| `/quiet` | 중요 알림만 (권한 요청 + 에러) |
+| `/mute` | 전체 알림 끄기 |
+| `/unmute` | 전체 알림 켜기 |
+
+### 알림 레벨
+
+| 레벨 | 명령 | 받는 알림 |
+|---|---|---|
+| 🔔 전체 | `/unmute` | 파일 변경, 터미널, 에러, 권한 요청 등 모든 알림 |
+| 🔕 중요만 | `/quiet` | 권한 요청 + 에러만 (파일 변경, 터미널 출력 생략) |
+| 🔇 꺼짐 | `/mute` | 모든 알림 차단 |
+
+`/quiet` 모드가 권장됩니다 — 에이전트가 권한을 요청하거나 에러가 발생할 때만 알림이 옵니다.
+
+### 권한 요청 감지
+
+에이전트가 작업 중 권한을 요청하면 (터미널 명령 실행, 브라우저 접근, 파일 접근 등) Telegram에 수락/거부 인라인 버튼이 자동으로 전송됩니다.
+
+감지 방법:
+1. **Context Key 폴링** (1차): Antigravity 내부의 `canAcceptOrRejectCommand` 등의 상태를 2초마다 확인
+2. **Activity Stall 감지** (폴백): 에이전트 활동 후 12초간 정지 → 권한 요청 추정
 
 ### 실시간 알림
 
@@ -147,17 +166,22 @@ vscode.commands.executeCommand('antigravity.sendPromptToAgentPanel', text)
     ↓
 Antigravity Agent Manager (Gemini)
     ↓
-파일 변경 / 터미널 실행 / 에러 발생
+파일 변경 / 터미널 실행 / 에러 발생 / 권한 요청
     ↓
-FileSystemWatcher / TerminalShellExecution / DiagnosticsListener
+FileSystemWatcher / TerminalShellExecution / DiagnosticsListener / Context Key Polling
     ↓
-Telegram 알림
+Telegram 알림 (알림 레벨에 따라 필터링)
 ```
 
-Antigravity의 비공식 내부 명령을 사용하여 Agent Manager에 직접 연결합니다. 별도의 Gemini API 키가 필요 없습니다.
+### 권한 요청 감지 원리
 
-> **Note**: Antigravity 환경에서 `fetch()` API가 차단되어 grammy의 기본 HTTP 클라이언트가 동작하지 않습니다.
-> 이를 해결하기 위해 `bot.api.config.use()` 트랜스포머로 모든 Telegram API 호출을 Node.js `https` 모듈로 교체했습니다.
+Antigravity 내부의 에이전트 스텝 상태:
+- `StepStatus.WAITING = 9` → 권한 요청 대기 중
+- Context Key: `antigravity.canAcceptOrRejectCommand` 등이 true로 전환
+- 2초 주기로 Context Key 폴링하여 WAITING 상태 감지
+- Context Key 읽기 불가 시 → 활동 정지 패턴으로 폴백 감지
+
+Antigravity의 비공식 내부 명령을 사용하여 Agent Manager에 직접 연결합니다. 별도의 Gemini API 키가 필요 없습니다.
 
 ## 개발
 
@@ -180,8 +204,8 @@ npm run watch
 ```
 src/
   extension.ts   # 확장 진입점, 명령 등록, 토큰 검증
-  bot.ts         # Telegram 봇 (grammy + https transport)
-  bridge.ts      # Antigravity Agent 브릿지
+  bot.ts         # Telegram 봇 (grammy + https transport, 알림 레벨)
+  bridge.ts      # Antigravity Agent 브릿지 (context key polling + stall detection)
   config.ts      # 설정 관리 (SecretStorage)
   explorer.ts    # 내부 명령 탐색 도구
 ```
@@ -190,6 +214,7 @@ src/
 
 - Antigravity의 비공식 내부 명령에 의존하므로, Antigravity 업데이트 시 동작이 변경될 수 있습니다
 - 에이전트의 텍스트 응답을 직접 캡처하는 API가 없어, 파일 변경/터미널 출력으로 작업 상태를 추적합니다
+- 권한 요청 감지는 Context Key 폴링 또는 활동 패턴 분석 기반이므로 100% 정확하지 않을 수 있습니다
 - Antigravity가 실행 중이고 워크스페이스가 열려 있어야 합니다
 
 ## 면책사항

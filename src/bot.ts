@@ -44,12 +44,15 @@ function escapeMarkdown(text: string): string {
   return text.replace(/([*_`\[])/g, '\\$1');
 }
 
+/** 알림 레벨: all=전체, important=권한요청+에러만, off=꺼짐 */
+type NotifyLevel = 'all' | 'important' | 'off';
+
 export class TelegramBot {
   private bot: Bot;
   private bridge: AntigravityBridge;
   private output: vscode.OutputChannel;
   private token: string;
-  private muted = false;
+  private notifyLevel: NotifyLevel = 'all';
   private eventBuffer: AgentEvent[] = [];
   private flushTimer: ReturnType<typeof setInterval> | undefined;
   private running = false;
@@ -261,8 +264,9 @@ export class TelegramBot {
         `• /status → 현재 상태\n` +
         `• /accept → 스텝 수락\n` +
         `• /reject → 스텝 거부\n` +
-        `• /mute → 알림 끄기\n` +
-        `• /unmute → 알림 켜기`,
+        `• /quiet → 중요 알림만 (권한요청+에러)\n` +
+        `• /mute → 전체 알림 끄기\n` +
+        `• /unmute → 전체 알림 켜기`,
         { parse_mode: 'Markdown' }
       );
     });
@@ -287,7 +291,7 @@ export class TelegramBot {
         `*Workspace:* ${escapeMarkdown(this.bridge.getWorkspaceInfo())}\n` +
         `*열린 파일 (${editors.length}):*\n${editorList}\n` +
         `*터미널 (${terminals.length}):*\n${terminalList}\n` +
-        `*알림:* ${this.muted ? '🔇 꺼짐' : '🔔 켜짐'}`,
+        `*알림:* ${this.notifyLevel === 'off' ? '🔇 꺼짐' : this.notifyLevel === 'important' ? '🔕 중요만' : '🔔 전체'}`,
         { parse_mode: 'Markdown' }
       );
     });
@@ -306,14 +310,20 @@ export class TelegramBot {
 
     this.bot.command('mute', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
-      this.muted = true;
-      await ctx.reply('🔇 알림이 꺼졌습니다. /unmute 로 다시 켤 수 있습니다.');
+      this.notifyLevel = 'off';
+      await ctx.reply('🔇 알림이 꺼졌습니다.\n/quiet → 중요 알림만\n/unmute → 전체 알림');
+    });
+
+    this.bot.command('quiet', async (ctx) => {
+      if (!this.isAuthorized(ctx)) return;
+      this.notifyLevel = 'important';
+      await ctx.reply('🔕 중요 알림만 받습니다 (권한 요청 + 에러).\n파일 변경, 터미널 출력 등은 생략됩니다.\n/unmute → 전체 알림\n/mute → 전체 끄기');
     });
 
     this.bot.command('unmute', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
-      this.muted = false;
-      await ctx.reply('🔔 알림이 켜졌습니다.');
+      this.notifyLevel = 'all';
+      await ctx.reply('🔔 전체 알림이 켜졌습니다.\n/quiet → 중요 알림만\n/mute → 전체 끄기');
     });
   }
 
@@ -374,7 +384,12 @@ export class TelegramBot {
 
   private setupBridgeListener() {
     this.bridgeDisposable = this.bridge.onEvent((event) => {
-      if (this.muted) return;
+      // 알림 레벨 필터링
+      if (this.notifyLevel === 'off') return;
+      if (this.notifyLevel === 'important') {
+        // important 모드: step_request + error만 통과
+        if (event.type !== 'step_request' && event.type !== 'error') return;
+      }
 
       // 버퍼 크기 제한 (메모리 보호)
       if (this.eventBuffer.length >= MAX_EVENT_BUFFER) {
