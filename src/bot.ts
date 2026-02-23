@@ -1,7 +1,8 @@
-import { Bot, InlineKeyboard, Context } from 'grammy';
+import { Bot, InlineKeyboard, Context, GrammyError, HttpError } from 'grammy';
 import * as vscode from 'vscode';
 import { AntigravityBridge, AgentEvent } from './bridge';
 import { getAllowedChatId } from './config';
+import * as https from 'https';
 
 /**
  * Telegram Bot - Antigravity Agent Manager 브릿지
@@ -62,6 +63,55 @@ export class TelegramBot {
     this.setupMessageHandler();
     this.setupCallbackQueries();
     this.setupBridgeListener();
+  }
+
+  /**
+   * 토큰 유효성 검증 (봇 생성 없이 HTTP로 직접 테스트)
+   * @returns { ok: true, botName: string } 또는 { ok: false, error: string }
+   */
+  static validateToken(token: string): Promise<{ ok: true; botName: string } | { ok: false; error: string }> {
+    return new Promise((resolve) => {
+      const url = `https://api.telegram.org/bot${token}/getMe`;
+      const timeout = setTimeout(() => {
+        resolve({ ok: false, error: '⏱️ 연결 시간 초과 (10초). 네트워크를 확인하세요.\n\n가능한 원인:\n• 인터넷 연결 불안정\n• 방화벽이 api.telegram.org 차단\n• 프록시/VPN 필요' });
+      }, 10000);
+
+      const req = https.get(url, (res) => {
+        clearTimeout(timeout);
+        let data = '';
+        res.on('data', chunk => { data += chunk; });
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (json.ok && json.result) {
+              resolve({ ok: true, botName: `@${json.result.username} (${json.result.first_name})` });
+            } else if (res.statusCode === 401 || res.statusCode === 404) {
+              resolve({ ok: false, error: '🔑 봇 토큰이 유효하지 않습니다.\n\n확인 사항:\n1. @BotFather에서 /newbot 으로 봇 생성\n2. 발급받은 토큰 전체를 정확히 복사\n3. "Tele-Antig: Set Token"으로 다시 입력' });
+            } else {
+              resolve({ ok: false, error: `❌ Telegram API 응답 오류: HTTP ${res.statusCode}\n${json.description || ''}` });
+            }
+          } catch {
+            resolve({ ok: false, error: `❌ 응답 파싱 실패: HTTP ${res.statusCode}` });
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        clearTimeout(timeout);
+        const errMsg = err.message || String(err);
+        if (errMsg.includes('ENOTFOUND') || errMsg.includes('EAI_AGAIN')) {
+          resolve({ ok: false, error: '🌐 DNS 조회 실패: api.telegram.org에 연결할 수 없습니다.\n\n가능한 원인:\n• 인터넷 연결 끊김\n• DNS 서버 문제\n• 프록시/VPN 설정 필요' });
+        } else if (errMsg.includes('ECONNREFUSED') || errMsg.includes('ECONNRESET')) {
+          resolve({ ok: false, error: '🚫 연결 거부됨: api.telegram.org에 접속할 수 없습니다.\n\n가능한 원인:\n• 방화벽이 Telegram API 차단\n• 프록시/VPN이 필요한 네트워크\n• 기업/학교 네트워크 제한' });
+        } else if (errMsg.includes('ETIMEDOUT') || errMsg.includes('TIMEOUT')) {
+          resolve({ ok: false, error: '⏱️ 연결 시간 초과.\n\n가능한 원인:\n• 네트워크 속도 문제\n• 방화벽/프록시 문제' });
+        } else {
+          resolve({ ok: false, error: `❌ 네트워크 오류: ${errMsg}` });
+        }
+      });
+
+      req.end();
+    });
   }
 
   /**
@@ -330,9 +380,10 @@ export class TelegramBot {
 
     this.bridge.startWatching();
     this.output.appendLine('[Bot] Starting Telegram bot...');
+    this.output.appendLine('[Bot] Validating token with Telegram API...');
 
     try {
-      // 봇 정보 확인
+      // 봇 정보 확인 (토큰 유효성 + 네트워크 체크)
       const me = await this.bot.api.getMe();
       this.output.appendLine(`[Bot] Bot: @${me.username} (${me.first_name})`);
 
@@ -353,13 +404,40 @@ export class TelegramBot {
       this.bot.start({
         onStart: () => {
           this.output.appendLine('[Bot] Polling started');
-          vscode.window.showInformationMessage('Tele-Antig: Telegram 봇 시작됨');
+          vscode.window.showInformationMessage('Tele-Antig: Telegram 봇 시작됨 ✅');
         },
       });
     } catch (e: any) {
       this.running = false;
+
+      // 에러 유형별 구체적 안내 메시지
+      let userMessage: string;
+
+      if (e instanceof GrammyError) {
+        // Telegram API가 응답했지만 에러 (토큰 문제)
+        if (e.error_code === 401 || e.error_code === 404) {
+          userMessage = '봇 토큰이 유효하지 않습니다. @BotFather에서 토큰을 확인하고 "Tele-Antig: Set Token"으로 다시 입력하세요.';
+        } else {
+          userMessage = `Telegram API 오류 (${e.error_code}): ${e.description}`;
+        }
+      } else if (e instanceof HttpError) {
+        // 네트워크 레벨 에러
+        userMessage = 'Telegram 서버에 연결할 수 없습니다. 인터넷 연결, 방화벽, VPN/프록시를 확인하세요.';
+      } else if (e.message?.includes('Network request')) {
+        // grammy의 기본 네트워크 에러 메시지
+        userMessage = 'Telegram API에 연결 실패. "Tele-Antig: Test Token"으로 상세 진단을 실행하세요.';
+      } else {
+        userMessage = e.message || String(e);
+      }
+
       this.output.appendLine(`[Bot] Start error: ${e.message}`);
-      vscode.window.showErrorMessage(`Tele-Antig: 봇 시작 실패 - ${e.message}`);
+      this.output.appendLine(`[Bot] Error type: ${e.constructor?.name}`);
+      this.output.appendLine(`[Bot] Tip: "Tele-Antig: Test Token" 명령으로 토큰과 네트워크를 진단할 수 있습니다.`);
+      vscode.window.showErrorMessage(`Tele-Antig: ${userMessage}`, 'Test Token').then(action => {
+        if (action === 'Test Token') {
+          vscode.commands.executeCommand('teleAntig.testToken');
+        }
+      });
       throw e;
     }
   }
