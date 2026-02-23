@@ -1,6 +1,6 @@
 # Tele-Antig
 
-> ⚠️ **Unofficial** third-party extension. Not affiliated with Google.
+> **Unofficial** third-party extension. Not affiliated with Google.
 
 Telegram으로 Google Antigravity의 Agent Manager를 원격 제어하는 VS Code 확장 프로그램.
 
@@ -32,7 +32,7 @@ npm run package
 ### 1. Telegram 봇 생성
 
 1. Telegram에서 [@BotFather](https://t.me/BotFather)에게 `/newbot` 전송
-2. 봇 이름과 username 설정
+2. 봇 이름과 username 설정 (username은 `_bot`으로 끝나야 함)
 3. 발급된 **봇 토큰**을 복사 (예: `123456789:ABCDefGhIjKlMnOpQrStUvWxYz...`)
 
 ### 2. 토큰 등록
@@ -43,12 +43,20 @@ Antigravity에서:
 2. 복사한 봇 토큰 붙여넣기
 3. 토큰은 OS 키체인에 암호화 저장됩니다 (settings.json에 노출되지 않음)
 
-### 3. 봇 시작 및 Chat ID 설정
+### 3. 토큰 테스트 (권장)
+
+1. `Ctrl+Shift+P` → **Tele-Antig: Test Token**
+2. 토큰 형식, 네트워크 연결, API 유효성을 한 번에 진단
+3. 성공하면 봇 이름이 표시됨
+4. 실패하면 원인별 안내 (잘못된 토큰 / DNS 실패 / 방화벽 차단 / 타임아웃)
+
+### 4. 봇 시작 및 Chat ID 설정
 
 1. `Ctrl+Shift+P` → **Tele-Antig: Start Telegram Bot**
 2. Telegram에서 생성한 봇에게 `/start` 전송
 3. 봇이 알려주는 **Chat ID**를 복사
 4. Antigravity에서 `Ctrl+Shift+P` → **Tele-Antig: Set Allowed Chat ID** → Chat ID 입력
+5. 다시 `/start` 전송하면 명령어 목록이 표시됨
 
 이제 준비 완료!
 
@@ -84,6 +92,7 @@ Antigravity에서:
 | `Tele-Antig: Stop Telegram Bot` | 봇 정지 |
 | `Tele-Antig: Set Telegram Bot Token` | 토큰 설정 |
 | `Tele-Antig: Set Allowed Chat ID` | 허용 Chat ID 설정 |
+| `Tele-Antig: Test Token` | 토큰 + 네트워크 진단 |
 | `Tele-Antig: Test Send to Agent` | 에이전트 전송 테스트 |
 
 ### 자동 시작
@@ -91,6 +100,30 @@ Antigravity에서:
 Antigravity 실행 시 봇을 자동으로 시작하려면:
 
 Settings → `teleAntig.autoStart` → `true`
+
+## 트러블슈팅
+
+### "Network request for 'getMe' failed!"
+
+v0.1.3에서 해결됨. grammy의 `fetch()` API가 Antigravity 환경에서 차단되는 문제를
+Node.js `https` 모듈로 교체하여 수정했습니다. 최신 버전으로 업데이트하세요.
+
+### 봇 시작 실패
+
+1. `Ctrl+Shift+P` → **Tele-Antig: Test Token** 실행
+2. Output 패널(`Tele-Antig`)에서 상세 진단 결과 확인
+3. 원인별 조치:
+   - **토큰 형식 오류**: `@BotFather`에서 토큰을 다시 복사하여 Set Token
+   - **토큰 유효하지 않음**: `@BotFather`에서 `/mybots` → 토큰 확인 또는 재발급
+   - **DNS/네트워크 오류**: 인터넷 연결, 방화벽, VPN/프록시 확인
+   - **타임아웃**: 네트워크 속도 또는 방화벽 문제
+
+### Chat ID를 모르겠어요
+
+1. 봇을 먼저 시작 (Chat ID 없이도 시작 가능)
+2. Telegram에서 봇에게 `/start` 전송
+3. 봇이 당신의 Chat ID를 알려줌 → 복사
+4. `Ctrl+Shift+P` → **Set Allowed Chat ID** → 붙여넣기
 
 ## 보안
 
@@ -106,7 +139,7 @@ Settings → `teleAntig.autoStart` → `true`
 ```
 Telegram 메시지
     ↓
-grammy (long-polling)
+grammy (long-polling, Node.js https transport)
     ↓
 AntigravityBridge
     ↓
@@ -122,6 +155,9 @@ Telegram 알림
 ```
 
 Antigravity의 비공식 내부 명령을 사용하여 Agent Manager에 직접 연결합니다. 별도의 Gemini API 키가 필요 없습니다.
+
+> **Note**: Antigravity 환경에서 `fetch()` API가 차단되어 grammy의 기본 HTTP 클라이언트가 동작하지 않습니다.
+> 이를 해결하기 위해 `bot.api.config.use()` 트랜스포머로 모든 Telegram API 호출을 Node.js `https` 모듈로 교체했습니다.
 
 ## 개발
 
@@ -143,8 +179,8 @@ npm run watch
 
 ```
 src/
-  extension.ts   # 확장 진입점, 명령 등록
-  bot.ts         # Telegram 봇 (grammy)
+  extension.ts   # 확장 진입점, 명령 등록, 토큰 검증
+  bot.ts         # Telegram 봇 (grammy + https transport)
   bridge.ts      # Antigravity Agent 브릿지
   config.ts      # 설정 관리 (SecretStorage)
   explorer.ts    # 내부 명령 탐색 도구
