@@ -44,8 +44,18 @@ function escapeMarkdown(text: string): string {
   return text.replace(/([*_`\[])/g, '\\$1');
 }
 
-/** 알림 레벨: all=전체, important=권한요청+에러만, off=꺼짐 */
-type NotifyLevel = 'all' | 'important' | 'off';
+/**
+ * 알림 레벨:
+ * all=전체, nofile=파일알림끄기, important=중요만(에이전트응답+권한요청+에러), off=꺼짐
+ *
+ * | 레벨 | agent_response | gui_message | step_request | error | file_change | terminal |
+ * |------|------|------|------|------|------|------|
+ * | all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+ * | nofile | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+ * | important | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+ * | off | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+ */
+type NotifyLevel = 'all' | 'nofile' | 'important' | 'off';
 
 export class TelegramBot {
   private bot: Bot;
@@ -264,7 +274,8 @@ export class TelegramBot {
         `• /status → 현재 상태\n` +
         `• /accept → 스텝 수락\n` +
         `• /reject → 스텝 거부\n` +
-        `• /quiet → 중요 알림만 (권한요청+에러)\n` +
+        `• /quiet → 중요 알림만\n` +
+        `• /nofile → 파일 변경 알림 끄기\n` +
         `• /mute → 전체 알림 끄기\n` +
         `• /unmute → 전체 알림 켜기`,
         { parse_mode: 'Markdown' }
@@ -291,7 +302,7 @@ export class TelegramBot {
         `*Workspace:* ${escapeMarkdown(this.bridge.getWorkspaceInfo())}\n` +
         `*열린 파일 (${editors.length}):*\n${editorList}\n` +
         `*터미널 (${terminals.length}):*\n${terminalList}\n` +
-        `*알림:* ${this.notifyLevel === 'off' ? '🔇 꺼짐' : this.notifyLevel === 'important' ? '🔕 중요만' : '🔔 전체'}`,
+        `*알림:* ${this.notifyLevel === 'off' ? '🔇 꺼짐' : this.notifyLevel === 'important' ? '🔕 중요만' : this.notifyLevel === 'nofile' ? '📁 파일끄기' : '🔔 전체'}`,
         { parse_mode: 'Markdown' }
       );
     });
@@ -311,19 +322,25 @@ export class TelegramBot {
     this.bot.command('mute', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
       this.notifyLevel = 'off';
-      await ctx.reply('🔇 알림이 꺼졌습니다.\n/quiet → 중요 알림만\n/unmute → 전체 알림');
+      await ctx.reply('🔇 전체 알림이 꺼졌습니다.\n/quiet → 중요 알림만\n/nofile → 파일 알림만 끄기\n/unmute → 전체 알림');
     });
 
     this.bot.command('quiet', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
       this.notifyLevel = 'important';
-      await ctx.reply('🔕 중요 알림만 받습니다 (권한 요청 + 에러).\n파일 변경, 터미널 출력 등은 생략됩니다.\n/unmute → 전체 알림\n/mute → 전체 끄기');
+      await ctx.reply('🔕 중요 알림만 받습니다.\n에이전트 응답, GUI 메시지, 권한 요청, 에러만 수신.\n파일 변경, 터미널 출력은 생략.\n/nofile → 파일만 끄기\n/unmute → 전체 알림');
+    });
+
+    this.bot.command('nofile', async (ctx) => {
+      if (!this.isAuthorized(ctx)) return;
+      this.notifyLevel = 'nofile';
+      await ctx.reply('📁 파일 변경 알림이 꺼졌습니다.\n에이전트 응답, 터미널, 에러 등은 계속 수신.\n/quiet → 중요 알림만\n/unmute → 전체 알림');
     });
 
     this.bot.command('unmute', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
       this.notifyLevel = 'all';
-      await ctx.reply('🔔 전체 알림이 켜졌습니다.\n/quiet → 중요 알림만\n/mute → 전체 끄기');
+      await ctx.reply('🔔 전체 알림이 켜졌습니다.\n/quiet → 중요 알림만\n/nofile → 파일 알림만 끄기\n/mute → 전체 끄기');
     });
   }
 
@@ -386,9 +403,16 @@ export class TelegramBot {
     this.bridgeDisposable = this.bridge.onEvent((event) => {
       // 알림 레벨 필터링
       if (this.notifyLevel === 'off') return;
+
       if (this.notifyLevel === 'important') {
-        // important 모드: step_request + error만 통과
-        if (event.type !== 'step_request' && event.type !== 'error') return;
+        // important: agent_response + gui_message + step_request + error만 통과
+        const pass = ['agent_response', 'gui_message', 'step_request', 'error'];
+        if (!pass.includes(event.type)) return;
+      }
+
+      if (this.notifyLevel === 'nofile') {
+        // nofile: file_change만 차단
+        if (event.type === 'file_change') return;
       }
 
       // 버퍼 크기 제한 (메모리 보호)
@@ -439,6 +463,46 @@ export class TelegramBot {
       parts.push(`🔴 *에러 (${errors.length}):*\n${errors.slice(0, 10).map(e => `  ${escapeMarkdown(e)}`).join('\n')}`);
     }
 
+    // 에이전트 응답은 별도 메시지로 전송 (길이가 길 수 있음)
+    if (grouped['agent_response']) {
+      for (const resp of grouped['agent_response']) {
+        const truncated = resp.length > 3500 ? resp.substring(0, 3500) + '\n\n...(잘림)' : resp;
+        try {
+          await this.bot.api.sendMessage(
+            chatId,
+            `🤖 *에이전트 응답:*\n${escapeMarkdown(truncated)}`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch {
+          try {
+            await this.bot.api.sendMessage(chatId, `🤖 에이전트 응답:\n${truncated}`);
+          } catch (e2) {
+            this.output.appendLine(`[Bot] Send agent response error: ${e2}`);
+          }
+        }
+      }
+    }
+
+    // GUI 메시지도 별도 전송
+    if (grouped['gui_message']) {
+      for (const msg of grouped['gui_message']) {
+        const truncated = msg.length > 1000 ? msg.substring(0, 1000) + '...(잘림)' : msg;
+        try {
+          await this.bot.api.sendMessage(
+            chatId,
+            `💬 *GUI 메시지:*\n${escapeMarkdown(truncated)}`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch {
+          try {
+            await this.bot.api.sendMessage(chatId, `💬 GUI 메시지:\n${truncated}`);
+          } catch (e2) {
+            this.output.appendLine(`[Bot] Send GUI message error: ${e2}`);
+          }
+        }
+      }
+    }
+
     if (grouped['step_request']) {
       const steps = grouped['step_request'];
       const keyboard = new InlineKeyboard()
@@ -453,7 +517,6 @@ export class TelegramBot {
       } catch (e) {
         this.output.appendLine(`[Bot] Send step request error: ${e}`);
       }
-      return; // 권한 요청은 따로 전송
     }
 
     if (grouped['info']) {

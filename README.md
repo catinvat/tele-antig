@@ -4,7 +4,12 @@
 
 Telegram으로 Google Antigravity의 Agent Manager를 원격 제어하는 VS Code 확장 프로그램.
 
-외출 중에도 Telegram 메시지 하나로 에이전트에게 코딩 작업을 시키고, 파일 변경/터미널 실행/에러 알림을 실시간으로 받을 수 있습니다.
+외출 중에도 Telegram 메시지 하나로 에이전트에게 코딩 작업을 시키고, **에이전트 응답**, 파일 변경, 터미널 실행, 에러 알림을 실시간으로 받을 수 있습니다.
+
+**v0.2.0 새 기능:**
+- 🤖 **에이전트 응답 전송** — 에이전트가 작업 완료 후 보고하는 텍스트를 Telegram으로 수신
+- 💬 **GUI 메시지 미러링** — Antigravity GUI에서 직접 입력한 메시지도 Telegram에 표시
+- 📁 **파일 알림 개별 제어** — `/nofile` 명령으로 파일 변경 알림만 끄기
 
 ## 설치
 
@@ -72,7 +77,8 @@ Antigravity에서:
 | `/status` | 워크스페이스, 열린 파일, 터미널, 알림 상태 |
 | `/accept` | 에이전트 스텝 수락 |
 | `/reject` | 에이전트 스텝 거부 |
-| `/quiet` | 중요 알림만 (권한 요청 + 에러) |
+| `/quiet` | 중요 알림만 (에이전트 응답 + GUI 메시지 + 권한 요청 + 에러) |
+| `/nofile` | 파일 변경 알림만 끄기 (나머지 모두 수신) |
 | `/mute` | 전체 알림 끄기 |
 | `/unmute` | 전체 알림 켜기 |
 
@@ -80,11 +86,12 @@ Antigravity에서:
 
 | 레벨 | 명령 | 받는 알림 |
 |---|---|---|
-| 🔔 전체 | `/unmute` | 파일 변경, 터미널, 에러, 권한 요청 등 모든 알림 |
-| 🔕 중요만 | `/quiet` | 권한 요청 + 에러만 (파일 변경, 터미널 출력 생략) |
+| 🔔 전체 | `/unmute` | 에이전트 응답, GUI 메시지, 파일 변경, 터미널, 에러, 권한 요청 |
+| 📁 파일끄기 | `/nofile` | 에이전트 응답, GUI 메시지, 터미널, 에러, 권한 요청 (파일 변경만 제외) |
+| 🔕 중요만 | `/quiet` | 에이전트 응답, GUI 메시지, 권한 요청, 에러 (파일 변경, 터미널 제외) |
 | 🔇 꺼짐 | `/mute` | 모든 알림 차단 |
 
-`/quiet` 모드가 권장됩니다 — 에이전트가 권한을 요청하거나 에러가 발생할 때만 알림이 옵니다.
+`/nofile` 모드가 권장됩니다 — 에이전트 응답과 중요 알림은 받으면서 파일 변경 알림만 끕니다.
 
 ### 권한 요청 감지
 
@@ -98,6 +105,8 @@ Antigravity에서:
 
 봇이 자동으로 아래 이벤트를 Telegram에 전송합니다:
 
+- 🤖 에이전트 응답 (작업 완료 보고, `notify_user` 메시지)
+- 💬 GUI 메시지 (Antigravity GUI에서 직접 입력한 메시지)
 - 📁 파일 생성/수정/삭제
 - 💻 터미널 명령 실행 및 출력
 - 🔴 코드 에러 발생
@@ -166,12 +175,23 @@ vscode.commands.executeCommand('antigravity.sendPromptToAgentPanel', text)
     ↓
 Antigravity Agent Manager (Gemini)
     ↓
-파일 변경 / 터미널 실행 / 에러 발생 / 권한 요청
+파일 변경 / 터미널 실행 / 에러 발생 / 권한 요청 / 에이전트 응답
     ↓
-FileSystemWatcher / TerminalShellExecution / DiagnosticsListener / Context Key Polling
+FileSystemWatcher / TerminalShellExecution / DiagnosticsListener
+  / Context Key Polling / TrajectoryMonitor (LS HTTP API)
     ↓
 Telegram 알림 (알림 레벨에 따라 필터링)
 ```
+
+### 에이전트 응답 캡처 원리
+
+Antigravity Language Server (`language_server_windows_x64.exe`)가 로컬에서 HTTP API를 제공합니다.
+`TrajectoryMonitor`가 5초 주기로 대화 이력(Trajectory)을 폴링하여 새 메시지를 감지합니다.
+
+- **프로세스 발견**: PowerShell로 LS 프로세스 PID + CSRF 토큰 자동 획득
+- **포트 발견**: PID의 listening 포트 중 HTTP 포트 자동 탐지
+- **API**: ConnectRPC JSON 형식으로 `GetAllCascadeTrajectories`, `GetCascadeTrajectorySteps` 호출
+- **에코 방지**: Telegram에서 보낸 메시지가 다시 GUI 메시지로 돌아오지 않도록 필터링
 
 ### 권한 요청 감지 원리
 
@@ -203,17 +223,20 @@ npm run watch
 
 ```
 src/
-  extension.ts   # 확장 진입점, 명령 등록, 토큰 검증
-  bot.ts         # Telegram 봇 (grammy + https transport, 알림 레벨)
-  bridge.ts      # Antigravity Agent 브릿지 (context key polling + stall detection)
-  config.ts      # 설정 관리 (SecretStorage)
-  explorer.ts    # 내부 명령 탐색 도구
+  extension.ts          # 확장 진입점, 명령 등록, 토큰 검증
+  bot.ts                # Telegram 봇 (grammy + https transport, 4단계 알림 레벨)
+  bridge.ts             # Antigravity Agent 브릿지 (context key polling + stall detection + trajectory)
+  lsClient.ts           # Language Server HTTP 클라이언트 (프로세스 자동 발견 + ConnectRPC API)
+  trajectoryMonitor.ts  # 대화 상태 폴링 모니터 (에이전트 응답 + GUI 메시지 감지)
+  config.ts             # 설정 관리 (SecretStorage)
+  explorer.ts           # 내부 명령 탐색 도구
 ```
 
 ## 제한사항
 
-- Antigravity의 비공식 내부 명령에 의존하므로, Antigravity 업데이트 시 동작이 변경될 수 있습니다
-- 에이전트의 텍스트 응답을 직접 캡처하는 API가 없어, 파일 변경/터미널 출력으로 작업 상태를 추적합니다
+- Antigravity의 비공식 내부 명령과 Language Server HTTP API에 의존하므로, Antigravity 업데이트 시 동작이 변경될 수 있습니다
+- Language Server 프로세스 발견은 Windows 전용입니다 (PowerShell 사용)
+- 에이전트 응답 캡처는 5초 폴링 주기이므로 약간의 지연이 있을 수 있습니다
 - 권한 요청 감지는 Context Key 폴링 또는 활동 패턴 분석 기반이므로 100% 정확하지 않을 수 있습니다
 - Antigravity가 실행 중이고 워크스페이스가 열려 있어야 합니다
 

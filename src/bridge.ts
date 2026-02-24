@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { LSClient } from './lsClient';
+import { TrajectoryMonitor } from './trajectoryMonitor';
 
 /**
  * Antigravity Agent Manager Bridge
@@ -24,7 +26,7 @@ import * as vscode from 'vscode';
  */
 
 export interface AgentEvent {
-  type: 'file_change' | 'terminal_output' | 'step_request' | 'info' | 'error';
+  type: 'file_change' | 'terminal_output' | 'step_request' | 'info' | 'error' | 'agent_response' | 'gui_message';
   content: string;
   timestamp: number;
 }
@@ -80,6 +82,11 @@ export class AntigravityBridge {
   private disposables: vscode.Disposable[] = [];
   private fileWatcher: vscode.FileSystemWatcher | undefined;
   private lastDiagnostics: Map<string, number> = new Map();
+
+  /** Trajectory Monitor (에이전트 응답 + GUI 메시지 감지) */
+  private lsClient: LSClient | undefined;
+  private trajectoryMonitor: TrajectoryMonitor | undefined;
+  private monitorDisposable: vscode.Disposable | undefined;
 
   /** 에이전트 활동 상태 추적 */
   private activity: ActivityState = {
@@ -339,12 +346,27 @@ export class AntigravityBridge {
       this.periodicCheck();
     }, CHECK_INTERVAL_MS);
 
-    this.output.appendLine('[Bridge] Watching started (context key polling + stall detection)');
+    // 7. Trajectory Monitor (에이전트 응답 + GUI 메시지 감지)
+    this.lsClient = new LSClient(this.output);
+    this.trajectoryMonitor = new TrajectoryMonitor(this.lsClient, this.output);
+    this.monitorDisposable = this.trajectoryMonitor.onEvent((event) => {
+      this.emit({
+        type: event.type,
+        content: event.content,
+        timestamp: event.timestamp,
+      });
+    });
+    this.trajectoryMonitor.startPolling();
+
+    this.output.appendLine('[Bridge] Watching started (context key polling + stall detection + trajectory monitor)');
   }
 
   // ─── Agent Commands ───
 
   async sendPrompt(text: string): Promise<boolean> {
+    // Telegram에서 보낸 텍스트 기록 (에코 방지)
+    this.trajectoryMonitor?.markTelegramSent(text);
+
     try {
       await vscode.commands.executeCommand('antigravity.openAgent');
       await new Promise(r => setTimeout(r, 500));
@@ -437,6 +459,8 @@ export class AntigravityBridge {
       clearInterval(this.checkTimer);
       this.checkTimer = undefined;
     }
+    this.monitorDisposable?.dispose();
+    this.trajectoryMonitor?.dispose();
     for (const d of this.disposables) {
       d.dispose();
     }

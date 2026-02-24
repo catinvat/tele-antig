@@ -13,3 +13,6 @@ out/bridge.js
 out/config.js
 out/explorer.js
 *.vsix
+test_*.mjs
+find_*.ps1
+nul
