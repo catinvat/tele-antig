@@ -567,6 +567,20 @@ export class TelegramBot {
       const me = await this.bot.api.getMe();
       this.output.appendLine(`[Bot] Bot: @${me.username} (${me.first_name})`);
 
+      // Telegram에 슬래시 명령어 메뉴 등록
+      await this.bot.api.setMyCommands([
+        { command: 'start', description: '연결 상태 확인' },
+        { command: 'new', description: '새 대화 시작' },
+        { command: 'status', description: '현재 상태' },
+        { command: 'accept', description: '에이전트 스텝 수락' },
+        { command: 'reject', description: '에이전트 스텝 거부' },
+        { command: 'quiet', description: '중요 알림만' },
+        { command: 'nofile', description: '파일 변경 알림 끄기' },
+        { command: 'mute', description: '전체 알림 끄기' },
+        { command: 'unmute', description: '전체 알림 켜기' },
+      ]);
+      this.output.appendLine('[Bot] Commands registered with Telegram');
+
       // 인증된 사용자에게 시작 알림
       const chatId = getAllowedChatId();
       if (chatId) {
