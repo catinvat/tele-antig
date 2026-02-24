@@ -360,51 +360,35 @@ export class TrajectoryMonitor {
       }
       this.lastStatus = summary.status;
 
-      // 5. 새 step이 있으면 조회 + WAITING 체크
+      // 5. 새 step이 있으면 조회
+      //    ⚠️ 추가 API 호출(detectWaitingSteps)은 LS GUI에 부하를 주므로 제거.
+      //    새 step 처리 시에만 WAITING 체크. 기존 step의 상태 전환은 context key 폴링으로 감지.
       if (hasNewSteps) {
-        const steps = await this.lsClient.getTrajectorySteps(cascadeId, this.lastStepCount);
+        const offset = this.lastStepCount;
+        const steps = await this.lsClient.getTrajectorySteps(cascadeId, offset);
         this.lastStepCount = summary.stepCount;
 
         if (steps.length > 0) {
           this.processNewSteps(steps);
-        }
-      }
 
-      // 6. WAITING 스텝 감지 — 기존 스텝이 WAITING으로 전환되는 경우 포착
-      //    에이전트가 RUNNING 중이면 최근 스텝 상태를 재확인
-      if (summary.status === 'CASCADE_RUN_STATUS_RUNNING' && summary.stepCount > 0) {
-        await this.detectWaitingSteps(cascadeId, summary.stepCount);
+          // 새 step 중 WAITING 상태인 것 감지
+          for (let i = 0; i < steps.length; i++) {
+            const absIdx = offset + i;
+            if (isWaitingStatus(steps[i].status) && !this.notifiedWaitingSteps.has(absIdx)) {
+              this.notifiedWaitingSteps.add(absIdx);
+              const desc = this.describeWaitingStep(steps[i]);
+              this.output.appendLine(`[TrajectoryMonitor] WAITING step detected: #${absIdx} — ${desc}`);
+              this.emit({
+                type: 'step_request',
+                content: desc,
+                timestamp: Date.now(),
+              });
+            }
+          }
+        }
       }
     } catch (e: any) {
       this.output.appendLine(`[TrajectoryMonitor] Poll error: ${e.message}`);
-    }
-  }
-
-  /**
-   * 최근 스텝에서 WAITING 상태를 감지하여 step_request 이벤트 발생
-   */
-  private async detectWaitingSteps(cascadeId: string, totalSteps: number) {
-    const offset = Math.max(0, totalSteps - 10);
-    const steps = await this.lsClient.getTrajectorySteps(cascadeId, offset);
-
-    for (let i = 0; i < steps.length; i++) {
-      const absIdx = offset + i;
-      const waiting = isWaitingStatus(steps[i].status);
-
-      if (waiting && !this.notifiedWaitingSteps.has(absIdx)) {
-        // 새 WAITING 스텝 감지
-        this.notifiedWaitingSteps.add(absIdx);
-        const desc = this.describeWaitingStep(steps[i]);
-        this.output.appendLine(`[TrajectoryMonitor] WAITING step detected: #${absIdx} — ${desc}`);
-        this.emit({
-          type: 'step_request',
-          content: desc,
-          timestamp: Date.now(),
-        });
-      } else if (!waiting && this.notifiedWaitingSteps.has(absIdx)) {
-        // WAITING이 해소됨 (수락/거부됨) → 추적 해제
-        this.notifiedWaitingSteps.delete(absIdx);
-      }
     }
   }
 
