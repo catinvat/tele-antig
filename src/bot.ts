@@ -45,24 +45,26 @@ function escapeMarkdown(text: string): string {
 }
 
 /**
- * 알림 레벨:
- * all=전체, nofile=파일알림끄기, important=중요만(에이전트응답+권한요청+에러), off=꺼짐
+ * 알림 토글 시스템:
+ * 각 이벤트 유형별로 독립적으로 on/off 가능
  *
- * | 레벨 | agent_response | gui_message | step_request | error | file_change | terminal |
- * |------|------|------|------|------|------|------|
- * | all | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
- * | nofile | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
- * | important | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
- * | off | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+ * 명령어:
+ *   /nofile  → 파일 변경 알림 토글
+ *   /noterm  → 터미널 출력 알림 토글
+ *   /quiet   → 프리셋: 중요 알림만 (파일+터미널+info 끔)
+ *   /mute    → 전체 알림 끄기
+ *   /unmute  → 전체 알림 켜기
  */
-type NotifyLevel = 'all' | 'nofile' | 'important' | 'off';
 
 export class TelegramBot {
   private bot: Bot;
   private bridge: AntigravityBridge;
   private output: vscode.OutputChannel;
   private token: string;
-  private notifyLevel: NotifyLevel = 'all';
+  /** 전체 음소거 플래그 */
+  private muted = false;
+  /** 개별 차단된 이벤트 유형 */
+  private blockedTypes = new Set<string>();
   private eventBuffer: AgentEvent[] = [];
   private flushTimer: ReturnType<typeof setInterval> | undefined;
   private running = false;
@@ -274,8 +276,9 @@ export class TelegramBot {
         `• /status → 현재 상태\n` +
         `• /accept → 스텝 수락\n` +
         `• /reject → 스텝 거부\n` +
+        `• /nofile → 파일 알림 토글\n` +
+        `• /noterm → 터미널 알림 토글\n` +
         `• /quiet → 중요 알림만\n` +
-        `• /nofile → 파일 변경 알림 끄기\n` +
         `• /mute → 전체 알림 끄기\n` +
         `• /unmute → 전체 알림 켜기`,
         { parse_mode: 'Markdown' }
@@ -302,7 +305,7 @@ export class TelegramBot {
         `*Workspace:* ${escapeMarkdown(this.bridge.getWorkspaceInfo())}\n` +
         `*열린 파일 (${editors.length}):*\n${editorList}\n` +
         `*터미널 (${terminals.length}):*\n${terminalList}\n` +
-        `*알림:* ${this.notifyLevel === 'off' ? '🔇 꺼짐' : this.notifyLevel === 'important' ? '🔕 중요만' : this.notifyLevel === 'nofile' ? '📁 파일끄기' : '🔔 전체'}`,
+        `*알림:* ${this.getNotifyStatusText()}`,
         { parse_mode: 'Markdown' }
       );
     });
@@ -319,28 +322,50 @@ export class TelegramBot {
       await ctx.reply(ok ? '🚫 스텝을 거부했습니다.' : '❌ 거부 실패');
     });
 
-    this.bot.command('mute', async (ctx) => {
+    this.bot.command('nofile', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
-      this.notifyLevel = 'off';
-      await ctx.reply('🔇 전체 알림이 꺼졌습니다.\n/quiet → 중요 알림만\n/nofile → 파일 알림만 끄기\n/unmute → 전체 알림');
+      this.muted = false;
+      this.toggleBlock('file_change');
+      const on = this.blockedTypes.has('file_change');
+      await ctx.reply(
+        `📁 파일 변경 알림: ${on ? '❌ 꺼짐' : '✅ 켜짐'}\n\n현재 상태: ${this.getNotifyStatusText()}`
+      );
+    });
+
+    this.bot.command('noterm', async (ctx) => {
+      if (!this.isAuthorized(ctx)) return;
+      this.muted = false;
+      this.toggleBlock('terminal_output');
+      const on = this.blockedTypes.has('terminal_output');
+      await ctx.reply(
+        `💻 터미널 알림: ${on ? '❌ 꺼짐' : '✅ 켜짐'}\n\n현재 상태: ${this.getNotifyStatusText()}`
+      );
     });
 
     this.bot.command('quiet', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
-      this.notifyLevel = 'important';
-      await ctx.reply('🔕 중요 알림만 받습니다.\n에이전트 응답, GUI 메시지, 권한 요청, 에러만 수신.\n파일 변경, 터미널 출력은 생략.\n/nofile → 파일만 끄기\n/unmute → 전체 알림');
+      this.muted = false;
+      this.blockedTypes.clear();
+      this.blockedTypes.add('file_change');
+      this.blockedTypes.add('terminal_output');
+      this.blockedTypes.add('info');
+      await ctx.reply(
+        '🔕 중요 알림만 받습니다.\n에이전트 응답, GUI 메시지, 권한 요청, 에러만 수신.\n\n' +
+        `/nofile → 파일 알림 토글\n/noterm → 터미널 알림 토글\n/unmute → 전체 켜기`
+      );
     });
 
-    this.bot.command('nofile', async (ctx) => {
+    this.bot.command('mute', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
-      this.notifyLevel = 'nofile';
-      await ctx.reply('📁 파일 변경 알림이 꺼졌습니다.\n에이전트 응답, 터미널, 에러 등은 계속 수신.\n/quiet → 중요 알림만\n/unmute → 전체 알림');
+      this.muted = true;
+      await ctx.reply('🔇 전체 알림이 꺼졌습니다.\n/unmute → 전체 켜기');
     });
 
     this.bot.command('unmute', async (ctx) => {
       if (!this.isAuthorized(ctx)) return;
-      this.notifyLevel = 'all';
-      await ctx.reply('🔔 전체 알림이 켜졌습니다.\n/quiet → 중요 알림만\n/nofile → 파일 알림만 끄기\n/mute → 전체 끄기');
+      this.muted = false;
+      this.blockedTypes.clear();
+      await ctx.reply('🔔 전체 알림이 켜졌습니다.\n/nofile → 파일 끄기\n/noterm → 터미널 끄기\n/quiet → 중요만\n/mute → 전체 끄기');
     });
   }
 
@@ -401,19 +426,11 @@ export class TelegramBot {
 
   private setupBridgeListener() {
     this.bridgeDisposable = this.bridge.onEvent((event) => {
-      // 알림 레벨 필터링
-      if (this.notifyLevel === 'off') return;
+      // 전체 음소거
+      if (this.muted) return;
 
-      if (this.notifyLevel === 'important') {
-        // important: agent_response + gui_message + step_request + error만 통과
-        const pass = ['agent_response', 'gui_message', 'step_request', 'error'];
-        if (!pass.includes(event.type)) return;
-      }
-
-      if (this.notifyLevel === 'nofile') {
-        // nofile: file_change만 차단
-        if (event.type === 'file_change') return;
-      }
+      // 개별 유형 차단
+      if (this.blockedTypes.has(event.type)) return;
 
       // 버퍼 크기 제한 (메모리 보호)
       if (this.eventBuffer.length >= MAX_EVENT_BUFFER) {
@@ -540,6 +557,28 @@ export class TelegramBot {
     }
   }
 
+  // ─── Notification Helpers ───
+
+  private toggleBlock(eventType: string) {
+    if (this.blockedTypes.has(eventType)) {
+      this.blockedTypes.delete(eventType);
+    } else {
+      this.blockedTypes.add(eventType);
+    }
+  }
+
+  private getNotifyStatusText(): string {
+    if (this.muted) return '🔇 전체 꺼짐';
+    if (this.blockedTypes.size === 0) return '🔔 전체 켜짐';
+
+    const labels: string[] = [];
+    if (this.blockedTypes.has('file_change')) labels.push('📁파일');
+    if (this.blockedTypes.has('terminal_output')) labels.push('💻터미널');
+    if (this.blockedTypes.has('info')) labels.push('ℹ️정보');
+    if (labels.length === 0) return '🔔 전체 켜짐';
+    return `🔕 ${labels.join(' ')} 꺼짐`;
+  }
+
   /**
    * 특정 채팅에 메시지 전송 (외부에서 호출용)
    */
@@ -574,8 +613,9 @@ export class TelegramBot {
         { command: 'status', description: '현재 상태' },
         { command: 'accept', description: '에이전트 스텝 수락' },
         { command: 'reject', description: '에이전트 스텝 거부' },
+        { command: 'nofile', description: '파일 알림 토글' },
+        { command: 'noterm', description: '터미널 알림 토글' },
         { command: 'quiet', description: '중요 알림만' },
-        { command: 'nofile', description: '파일 변경 알림 끄기' },
         { command: 'mute', description: '전체 알림 끄기' },
         { command: 'unmute', description: '전체 알림 켜기' },
       ]);
