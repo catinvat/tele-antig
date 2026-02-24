@@ -401,9 +401,20 @@ export class AntigravityBridge {
   }
 
   async acceptStep(): Promise<boolean> {
+    // 1차: Trajectory Monitor → Language Server HTTP API (정확하고 항상 동작)
+    if (this.trajectoryMonitor) {
+      const ok = await this.trajectoryMonitor.acceptWaitingStep(true);
+      if (ok) {
+        this.output.appendLine('[Bridge] Step accepted via LS API');
+        this.resetActivityTracking();
+        return true;
+      }
+    }
+
+    // 2차: VS Code 명령 (폴백 — 웹뷰가 포커스된 경우에만 동작)
     try {
       await vscode.commands.executeCommand('antigravity.agent.acceptAgentStep');
-      this.output.appendLine('[Bridge] Step accepted');
+      this.output.appendLine('[Bridge] Step accepted via VS Code command (fallback)');
       this.resetActivityTracking();
       return true;
     } catch (e: any) {
@@ -413,9 +424,20 @@ export class AntigravityBridge {
   }
 
   async rejectStep(): Promise<boolean> {
+    // 1차: Trajectory Monitor → Language Server HTTP API
+    if (this.trajectoryMonitor) {
+      const ok = await this.trajectoryMonitor.acceptWaitingStep(false);
+      if (ok) {
+        this.output.appendLine('[Bridge] Step rejected via LS API');
+        this.clearActivityTracking();
+        return true;
+      }
+    }
+
+    // 2차: VS Code 명령 (폴백)
     try {
       await vscode.commands.executeCommand('antigravity.agent.rejectAgentStep');
-      this.output.appendLine('[Bridge] Step rejected');
+      this.output.appendLine('[Bridge] Step rejected via VS Code command (fallback)');
       this.clearActivityTracking();
       return true;
     } catch (e: any) {

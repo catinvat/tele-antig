@@ -161,6 +161,24 @@ export class LSClient {
     return result?.steps ?? [];
   }
 
+  /**
+   * 에이전트 스텝 수락/거부 (HandleCascadeUserInteraction API)
+   *
+   * interaction 예시:
+   * {
+   *   trajectoryId: "...",
+   *   stepIndex: 5,
+   *   runCommand: { confirm: true, proposedCommandLine: "npm test", submittedCommandLine: "npm test" }
+   * }
+   */
+  async handleUserInteraction(cascadeId: string, interaction: Record<string, any>): Promise<boolean> {
+    const result = await this.apiCall<Record<string, any>>(
+      'HandleCascadeUserInteraction',
+      { cascadeId, interaction }
+    );
+    return result !== null;
+  }
+
   // ─── Private: Process Discovery ───
 
   private findLSProcess(): Promise<{ pid: number; csrfToken: string } | null> {
